@@ -128,17 +128,30 @@ def main():
         ((d, c) for d, c in by_dir.items() if c["CRITICAL"] or c["HIGH"]),
         key=lambda x: (-x[1]["CRITICAL"], -x[1]["HIGH"]))
 
-    # Menu bar title: red when something is actively exploited, orange for OS security, else plain.
+    # Menu bar title: one glyph per problem type, only when nonzero.
+    #   flame = exploited bug with a fix waiting, ladybug = projects with critical deps, arrow = updates.
+    crit_projects = [d for d, c in critical_projects if c["CRITICAL"]]
+    parts = []
     if kev_real or security_os:
-        print(f"{len(kev_real) + len(security_os)}·{n_updates} | sfimage=exclamationmark.shield.fill sfcolor=#e5484d")
-    elif n_updates:
-        print(f"{n_updates} | sfimage=shield.lefthalf.filled")
+        parts.append(f":flame.fill: {len(kev_real) + len(security_os)}")
+    if crit_projects:
+        parts.append(f":ladybug.fill: {len(crit_projects)}")
+    if n_updates:
+        parts.append(f":arrow.down.circle: {n_updates}")
+    color = " sfcolor=#e5484d color=#e5484d" if kev_real or security_os else ""
+    tip = (f"{len(kev_real)} exploited bugs with a fix waiting · {len(crit_projects)} projects with critical "
+           f"dependency vulnerabilities · {n_updates} updates")
+    if parts:
+        print(f"{'  '.join(parts)} | symbolize=true tooltip={tip}{color}")
     else:
-        print("| sfimage=checkmark.shield")
+        print("| sfimage=checkmark.shield tooltip=All clear")
     print("---")
 
     when = datetime.fromisoformat(st["scanned_at"]).strftime("%b %-d, %-I:%M %p")
     print(f"Last scan: {when} | color=gray size=12")
+    lock = STATE.parent / "scan.lock"
+    if lock.exists() and time.time() - lock.stat().st_mtime < 900:
+        print("Scanning now… the menu updates when it finishes | color=gray size=12 sfimage=hourglass")
     print("Scan now | bash=/usr/bin/python3 param1=" + str(SCAN) + " terminal=false refresh=true sfimage=arrow.clockwise")
     print("---")
 
@@ -188,7 +201,7 @@ def main():
             print(f"----…and {len(items) - MAX_ROWS} more (Update all covers them) | color=gray")
 
     print("---")
-    print(f"Vulnerable project deps ({len(critical_projects)} projects) | sfimage=ladybug")
+    print(f"Vulnerable project deps · {len(crit_projects)} critical, {len(critical_projects) - len(crit_projects)} high-only | sfimage=ladybug")
     if "Project dependencies" in missing:
         print("--Not set up: needs osv-scanner | color=gray")
         action("--Set it up", "brew install osv-scanner", " sfimage=plus.circle")

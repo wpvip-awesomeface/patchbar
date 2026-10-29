@@ -242,6 +242,8 @@ def main():
         tmp.write_text(json.dumps(state, indent=2))
         tmp.replace(STATE)
         print(f"wrote {STATE}")
+        # Ask SwiftBar to redraw now instead of waiting for the hourly refresh.
+        run(["/usr/bin/open", "-g", "swiftbar://refreshplugin?name=patchbar"], timeout=10)
     finally:
         lock.unlink(missing_ok=True)
 
