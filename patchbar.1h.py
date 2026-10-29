@@ -21,6 +21,7 @@ STATE = HOME / "Library/Caches/patchbar/state.json"
 # SwiftBar runs a symlink of this file; resolve to find scan.py next to the real one.
 SCAN = Path(os.path.realpath(__file__)).parent / "scan.py"
 COPY = SCAN.parent / "copy.sh"
+VET = SCAN.parent / "vet.py"
 REPO = SCAN.parent
 BREW_PATH = "/opt/homebrew/bin:/usr/local/bin"
 STALE_SECONDS = 6 * 3600
@@ -66,12 +67,24 @@ def copy(cmd):
     return f'bash={COPY} param1="{cmd}" terminal=false refresh=false'
 
 
-def action(text, cmd, extra=""):
-    """A row that runs cmd in Terminal; holding Option swaps it for a copy-to-clipboard row."""
-    print(f"{text} | {term(cmd)}{extra}")
+def action(text, cmd, extra="", run=None):
+    """A row that runs cmd (or its vetted form, run) in Terminal; holding Option swaps it for a copy row."""
+    print(f"{text} | {term(run or cmd)}{extra}")
     depth = text[:len(text) - len(text.lstrip("-"))]
     label = cmd if len(cmd) <= 60 else cmd[:57] + "…"
     print(f"{depth}Copy: {esc(label)} | {copy(cmd)} alternate=true sfimage=doc.on.clipboard")
+
+
+VET_ECO = {"npm (global)": "npm", "Python": "pypi"}
+
+
+def vetted(label, items, cmd):
+    """npm and pip updates go through vet.py, which checks the new versions for red flags, then installs them."""
+    eco = VET_ECO.get(label)
+    pkgs = [f"{i['name']}@{i['current']}" for i in items if i.get("cmd")]
+    if not eco or not cmd or not pkgs:
+        return cmd
+    return " ".join(["/usr/bin/python3", shlex.quote(str(VET)), eco, *map(shlex.quote, pkgs)])
 
 
 def section_cmd(label, items):
@@ -110,6 +123,7 @@ def main():
     kev = st["vulns"].get("Exploited in the wild (CISA KEV)", [])
     # A KEV hit only counts as "act now" if a matching update is actually pending on this Mac.
     pending = {i["name"].lower(): i for items in updates.values() for i in items}
+    label_of = {id(i): label for label, items in updates.items() for i in items}
     for k in kev:
         words = [w for w in k["name"].lower().replace("group", "").split() if len(w) > 2]
         if k["name"].startswith("Apple"):
@@ -163,7 +177,8 @@ def main():
         status = "update pending" if fix else "you look patched"
         print(f"--{esc(k['name'])} · {k['id']} · {status} | href={k['url']} color={'#e5484d' if fix else 'gray'}")
         if fix:
-            action(f"----Patch now: {esc(fix['name'])} → {esc(fix['latest'])}", fix["cmd"], " sfimage=bolt.fill")
+            action(f"----Patch now: {esc(fix['name'])} → {esc(fix['latest'])}", fix["cmd"], " sfimage=bolt.fill",
+                   vetted(label_of.get(id(fix)), [fix], fix["cmd"]))
         if k.get("title"):
             print(f"----{esc(k['title'])} | color=gray size=12")
             print(f"----Added {k['added']} · CISA patch-by {k.get('due')} | color=gray size=12")
@@ -172,10 +187,11 @@ def main():
 
     print("---")
     # macOS updates need a restart, so they stay out of the one-click "everything" run.
-    everything = " ; ".join(c for c in (section_cmd(l, i) for l, i in updates.items() if l != "macOS") if c)
+    sections = [(l, i, section_cmd(l, i)) for l, i in updates.items() if l != "macOS"]
+    everything = " ; ".join(c for _, _, c in sections if c)
     if everything:
         action(f"Update everything ({n_updates - len(updates.get('macOS', []))})", everything,
-               " sfimage=bolt.circle.fill sfcolor=#30a46c")
+               " sfimage=bolt.circle.fill sfcolor=#30a46c", " ; ".join(vetted(l, i, c) for l, i, c in sections if c))
     print("Hold ⌥ Option to copy commands instead of running them | color=gray size=11")
     print(f"Updates ({n_updates}) | sfimage=arrow.down.circle")
     for label, items in updates.items():
@@ -192,11 +208,12 @@ def main():
             continue
         cmd = section_cmd(label, items)
         if cmd:
-            action(f"----Update all {label}", cmd, " sfimage=bolt.fill")
+            action(f"----Update all {label}", cmd, " sfimage=bolt.fill", vetted(label, items, cmd))
             print("---------")
         for i in items[:MAX_ROWS]:
             color = " color=#e5484d" if i["severity"] == "security" else ""
-            action(f"----{esc(i['name'])}  {esc(i['current'])} → {esc(i['latest'])}", i["cmd"], color)
+            action(f"----{esc(i['name'])}  {esc(i['current'])} → {esc(i['latest'])}", i["cmd"], color,
+                   vetted(label, [i], i["cmd"]))
         if len(items) > MAX_ROWS:
             print(f"----…and {len(items) - MAX_ROWS} more (Update all covers them) | color=gray")
 
