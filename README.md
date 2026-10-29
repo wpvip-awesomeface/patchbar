@@ -27,6 +27,19 @@ Use `install.sh --minimal` to skip the optional tools.
 
 Scans run in the background every 6 hours. The menu opens instantly.
 
+## Suspicious-update check
+
+Before any npm or Python update button installs anything, Patchbar checks each new version against the one you have (usually under 15 seconds):
+
+- **Red flags** (Patchbar pauses and asks): new or changed install scripts, a Python package that now ships only source code (so pip would run its setup code), a publisher who wasn't a maintainer before, a lost provenance attestation, new obfuscated code or `.pth` startup files, code that newly runs shell commands or `eval`s strings, new hard-coded IP addresses or webhook hosts, or an [OSV](https://osv.dev) malicious-package advisory (`MAL-…`).
+- **Heads-ups** (shown, no pause): new maintainers, a big size jump, a release under 48 hours old, deprecation notices, new network or base64 code.
+
+When something is flagged you choose: press Enter to install the rest and skip the flagged ones, `a` to install everything anyway, or `n` to install nothing. Patchbar installs the exact versions it checked.
+
+Run it by hand: `~/.patchbar/vet.py --check-only npm typescript@6.0.3 pypi requests@2.31.0`
+
+It uses public registry data only (registry.npmjs.org, pypi.org, api.osv.dev). Package files are read in memory and never run.
+
 ## Settings
 
 In the menu, under **Patchbar**:
@@ -43,4 +56,4 @@ In the menu, under **Patchbar**:
 
 ## Privacy
 
-Everything runs on your Mac. The only outside requests are the CISA feed, OSV.dev (package names and versions only), and each package manager's normal update check.
+Everything runs on your Mac. The only outside requests are the CISA feed, OSV.dev (package names and versions only), each package manager's normal update check, and the public npm and PyPI registries for the suspicious-update check.
