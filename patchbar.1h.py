@@ -5,8 +5,10 @@
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 """SwiftBar plugin: reads the cached scan and renders the menu. Kicks off a background scan when stale."""
+import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -34,8 +36,30 @@ def start_scan():
                      start_new_session=True)
 
 
+RUN_DIR = HOME / "Library/Caches/patchbar/run"
+
+
 def term(cmd):
-    return f'bash=/bin/zsh param1=-lc param2="{cmd}; echo; echo Done. Patchbar is re-scanning in the background.; (/usr/bin/python3 {SCAN} >/dev/null 2>&1 &); exec zsh" terminal=true refresh=false'
+    """Open cmd in a new Terminal window.
+
+    SwiftBar's terminal=true types the command into Terminal, which cuts off long lines and leaves the
+    shell stuck on an open quote. A .command script file avoids typing and quoting entirely.
+    """
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    script = RUN_DIR / f"{hashlib.sha1(cmd.encode()).hexdigest()[:12]}.command"
+    if not script.exists():
+        script.write_text(
+            "#!/bin/zsh -l\n"
+            "clear\n"
+            f"echo {shlex.quote('Patchbar running: ' + cmd)}\n"
+            "echo\n"
+            f"{cmd}\n"
+            "echo\n"
+            "echo 'Done. Patchbar is re-scanning in the background; the menu updates in a few minutes.'\n"
+            f"(/usr/bin/python3 {shlex.quote(str(SCAN))} >/dev/null 2>&1 &)\n"
+        )
+        script.chmod(0o755)
+    return f"bash=/usr/bin/open param1={script} terminal=false refresh=false"
 
 
 def copy(cmd):
@@ -67,6 +91,7 @@ def section_cmd(label, items):
 
 
 def main():
+    shutil.rmtree(RUN_DIR, ignore_errors=True)  # rebuilt below from the current scan
     if not STATE.exists():
         start_scan()
         print("| sfimage=shield")
