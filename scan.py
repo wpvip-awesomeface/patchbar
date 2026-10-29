@@ -103,7 +103,7 @@ def scan_mas():
     for line in out.splitlines():
         m = re.match(r"\s*(\d+)\s+(.+?)\s+\((\S+)\s+->\s+(\S+)\)", line)
         if m:
-            items.append(item(m[2], m[3], m[4], f"mas upgrade {m[1]}"))
+            items.append(item(m[2], m[3], m[4], f"open 'macappstore://apps.apple.com/app/id{m[1]}'"))
     return items
 
 

@@ -39,25 +39,39 @@ def start_scan():
 RUN_DIR = HOME / "Library/Caches/patchbar/run"
 
 
-def term(cmd):
-    """Open cmd in a new Terminal window.
+LOG = HOME / "Library/Logs/patchbar/last-run.log"
+LAST_RUN = HOME / "Library/Caches/patchbar/last-run.json"
+
+
+def term(cmd, steps=None):
+    """Open a new Terminal window that runs cmd (or labelled steps) and reports what passed or failed.
 
     SwiftBar's terminal=true types the command into Terminal, which cuts off long lines and leaves the
     shell stuck on an open quote. A .command script file avoids typing and quoting entirely.
     """
+    steps = steps or [("Update", cmd)]
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    script = RUN_DIR / f"{hashlib.sha1(cmd.encode()).hexdigest()[:12]}.command"
+    script = RUN_DIR / f"{hashlib.sha1(repr(steps).encode()).hexdigest()[:12]}.command"
     if not script.exists():
-        script.write_text(
-            "#!/bin/zsh -l\n"
-            "clear\n"
-            f"echo {shlex.quote('Patchbar running: ' + cmd)}\n"
-            "echo\n"
-            f"{cmd}\n"
-            "echo\n"
-            "echo 'Done. Patchbar is re-scanning in the background; the menu updates in a few minutes.'\n"
-            f"(/usr/bin/python3 {shlex.quote(str(SCAN))} >/dev/null 2>&1 &)\n"
-        )
+        lines = [
+            "#!/bin/zsh -l",
+            "clear",
+            f"LOG={shlex.quote(str(LOG))}; mkdir -p ${{LOG:h}}; : > $LOG",
+            "ok=(); failed=()",
+            'step() { print -P "\\n%F{cyan}==> $1%f  ($2)"; eval "$2" 2>&1 | tee -a $LOG; '
+            'if (( ${pipestatus[1]} )); then failed+=("$1"); else ok+=("$1"); fi }',
+        ]
+        lines += [f"step {shlex.quote(label)} {shlex.quote(c)}" for label, c in steps]
+        lines += [
+            "echo",
+            'if (( ${#failed} )); then print -P "%F{red}✗ Didn\'t finish: ${(j:, :)failed}%f  (details: $LOG)"; '
+            'else print -P "%F{green}✓ All done%f"; fi',
+            f"printf '{{\"at\": \"%s\", \"ok\": %d, \"failed\": \"%s\"}}' \"$(date +%H:%M)\" ${{#ok}} "
+            f"\"${{(j:, :)failed}}\" > {shlex.quote(str(LAST_RUN))}",
+            "echo 'Patchbar is re-scanning; the menu bar updates in a few minutes. You can close this window.'",
+            f"(/usr/bin/python3 {shlex.quote(str(SCAN))} >/dev/null 2>&1 &)",
+        ]
+        script.write_text("\n".join(lines) + "\n")
         script.chmod(0o755)
     return f"bash=/usr/bin/open param1={script} terminal=false refresh=false"
 
@@ -66,9 +80,9 @@ def copy(cmd):
     return f'bash={COPY} param1="{cmd}" terminal=false refresh=false'
 
 
-def action(text, cmd, extra=""):
+def action(text, cmd, extra="", steps=None):
     """A row that runs cmd in Terminal; holding Option swaps it for a copy-to-clipboard row."""
-    print(f"{text} | {term(cmd)}{extra}")
+    print(f"{text} | {term(cmd, steps)}{extra}")
     depth = text[:len(text) - len(text.lstrip("-"))]
     label = cmd if len(cmd) <= 60 else cmd[:57] + "…"
     print(f"{depth}Copy: {esc(label)} | {copy(cmd)} alternate=true sfimage=doc.on.clipboard")
@@ -80,9 +94,11 @@ def section_cmd(label, items):
     if not names:
         return ""
     if label == "Homebrew":
-        return "brew upgrade"
+        # Plain `brew upgrade` skips self-updating apps (Zoom, Raycast…) that the scan counts.
+        return "brew upgrade --greedy-auto-updates"
     if label == "App Store":
-        return "mas upgrade"
+        # mas needs an admin password to install; the App Store's own Update All doesn't.
+        return "open 'macappstore://showUpdatesPage'"
     if label == "npm (global)":
         return "npm install -g " + " ".join(f"{n}@latest" for n in names)
     if label == "Python":
@@ -91,7 +107,9 @@ def section_cmd(label, items):
 
 
 def main():
-    shutil.rmtree(RUN_DIR, ignore_errors=True)  # rebuilt below from the current scan
+    for old in RUN_DIR.glob("*.command"):  # prune; never delete a script that may be running right now
+        if time.time() - old.stat().st_mtime > 86400:
+            old.unlink(missing_ok=True)
     if not STATE.exists():
         start_scan()
         print("| sfimage=shield")
@@ -149,13 +167,26 @@ def main():
 
     when = datetime.fromisoformat(st["scanned_at"]).strftime("%b %-d, %-I:%M %p")
     print(f"Last scan: {when} | color=gray size=12")
+    if LAST_RUN.exists():
+        try:
+            lr = json.loads(LAST_RUN.read_text())
+            if lr["failed"]:
+                print(f"Last update ({lr['at']}): didn't finish: {esc(lr['failed'])} | bash=/usr/bin/open param1=-t "
+                      f"param2={LOG} terminal=false color=#e5484d sfimage=exclamationmark.triangle")
+            else:
+                print(f"Last update ({lr['at']}): all done | color=gray size=12 sfimage=checkmark")
+        except (ValueError, KeyError):
+            pass
     lock = STATE.parent / "scan.lock"
     if lock.exists() and time.time() - lock.stat().st_mtime < 900:
         print("Scanning now… the menu updates when it finishes | color=gray size=12 sfimage=hourglass")
     print("Scan now | bash=/usr/bin/python3 param1=" + str(SCAN) + " terminal=false refresh=true sfimage=arrow.clockwise")
     print("---")
 
-    print(f"Actively exploited · {len(kev_real)} need patching | sfimage=flame.fill sfcolor=#e5484d")
+    if kev_real:
+        print(f"Actively exploited · {len(kev_real)} need patching | sfimage=flame.fill sfcolor=#e5484d")
+    else:
+        print(f"Actively exploited · nothing to patch | sfimage=checkmark.shield.fill sfcolor=#30a46c")
     if not kev:
         print("--Nothing matching your apps in the last 45 days | color=gray")
     for k in kev:
@@ -172,10 +203,10 @@ def main():
 
     print("---")
     # macOS updates need a restart, so they stay out of the one-click "everything" run.
-    everything = " ; ".join(c for c in (section_cmd(l, i) for l, i in updates.items() if l != "macOS") if c)
-    if everything:
-        action(f"Update everything ({n_updates - len(updates.get('macOS', []))})", everything,
-               " sfimage=bolt.circle.fill sfcolor=#30a46c")
+    steps = [(l, c) for l, c in ((l, section_cmd(l, i)) for l, i in updates.items() if l != "macOS") if c]
+    if steps:
+        action(f"Update everything ({n_updates - len(updates.get('macOS', []))})", " ; ".join(c for _, c in steps),
+               " sfimage=bolt.circle.fill sfcolor=#30a46c", steps=steps)
     print("Hold ⌥ Option to copy commands instead of running them | color=gray size=11")
     print(f"Updates ({n_updates}) | sfimage=arrow.down.circle")
     for label, items in updates.items():
