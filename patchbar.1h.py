@@ -89,36 +89,49 @@ def action(text, cmd, extra="", run=None, steps=None):
     print(f"{depth}Copy: {esc(label)} | {copy(cmd)} alternate=true sfimage=doc.on.clipboard")
 
 
-PYTHON = "python3"  # set from the scan: the interpreter whose packages were checked
-VET_ECO = {"npm (global)": "npm", "Python": "pypi"}
-
-
-def vetted(label, items, cmd):
-    """npm and pip updates go through vet.py, which checks the new versions for red flags, then installs them."""
-    eco = VET_ECO.get(label)
-    pkgs = [f"{i['name']}@{i['current']}" for i in items if i.get("cmd")]
-    if not eco or not cmd or not pkgs:
+def vetted(items, cmd):
+    """npm and pip updates go through vet.py, which checks the new versions for red flags, then installs them
+    into the same install the scan checked (one interpreter / one node)."""
+    items = [i for i in items if i.get("cmd") and i.get("eco")]
+    if not items or not cmd:
         return cmd
-    env = [f"PATCHBAR_PYTHON={shlex.quote(PYTHON)}"] if eco == "pypi" else []
+    eco, first = items[0]["eco"], items[0]
+    env = ([f"PATCHBAR_PYTHON={shlex.quote(first['python'])}"] if eco == "pypi" and first.get("python") else
+           [f"PATCHBAR_NPM_PATH={shlex.quote(first['npm_path'])}"] if eco == "npm" and first.get("npm_path") else [])
+    pkgs = [f"{i['name']}@{i['current']}" for i in items]
     return " ".join([*env, "/usr/bin/python3", shlex.quote(str(VET)), eco, *map(shlex.quote, pkgs)])
 
 
+def safe_items(items):
+    """Updates that are fine to run in bulk; the rest are 'review first' (lockstep groups, pinned by another package)."""
+    return [i for i in items if i.get("cmd") and not i.get("review")]
+
+
+def pkg_cmd(items, names):
+    """One pip/npm command for several packages, pinned to the install the items came from."""
+    first = items[0]
+    if first.get("eco") == "pypi":
+        return f"{shlex.quote(first['python'])} -m pip install -U " + " ".join(names)
+    if first.get("eco") == "npm":
+        prefix = first["cmd"].split("npm install", 1)[0]
+        return f"{prefix}npm install -g " + " ".join(f"{n}@latest" for n in names)
+    return ""
+
+
 def section_cmd(label, items):
-    """One command that updates everything in a section."""
-    names = [i["name"] for i in items if i.get("cmd")]
-    if not names:
-        return ""
-    if label == "Homebrew":
+    """One command that updates everything in a section that's safe to bulk update."""
+    if label == "Homebrew" and items:
         # Plain `brew upgrade` skips self-updating apps (Zoom, Raycast…) that the scan counts.
         return "brew upgrade --greedy-auto-updates"
-    if label == "App Store":
+    if label == "App Store" and items:
         # mas needs an admin password to install; the App Store's own Update All doesn't.
         return "open 'macappstore://showUpdatesPage'"
-    if label == "npm (global)":
-        return "npm install -g " + " ".join(f"{n}@latest" for n in names)
-    if label == "Python":
-        return f"{shlex.quote(PYTHON)} -m pip install -U " + " ".join(names)
-    return " ; ".join(i["cmd"] for i in items if i.get("cmd"))
+    safe = safe_items(items)
+    if not safe:
+        return ""
+    if safe[0].get("eco"):
+        return pkg_cmd(safe, [i["name"] for i in safe])
+    return " ; ".join(i["cmd"] for i in safe)
 
 
 def main():
@@ -143,11 +156,9 @@ def main():
 
     st = json.loads(STATE.read_text())
     age = time.time() - STATE.stat().st_mtime
-    if age > STALE_SECONDS:
+    if age > STALE_SECONDS or "envs" not in st:  # also re-scan caches written by older versions
         start_scan()
 
-    global PYTHON
-    PYTHON = st.get("python", "python3")
     updates = st["updates"]
     missing = st.get("missing", {})
     kev = st["vulns"].get("Exploited in the wild (CISA KEV)", [])
@@ -157,7 +168,8 @@ def main():
     for k in kev:
         words = [w for w in k["name"].lower().replace("group", "").split() if len(w) > 2]
         if k["name"].startswith("Apple"):
-            k["fix"] = updates.get("macOS") and updates["macOS"][0]
+            # Only a macOS / Safari / security update fixes an Apple bug (not Xcode or Command Line Tools).
+            k["fix"] = next((i for i in updates.get("macOS", []) if i.get("os_patch")), None)
         else:
             k["fix"] = next((pending[w] for w in words if w in pending), None)
     kev_real = [k for k in kev if k.get("severity") == "EXPLOITED" and k.get("fix")]
@@ -232,16 +244,21 @@ def main():
     # macOS updates need a restart, so they stay out of the one-click "everything" run.
     sections = [(l, i, section_cmd(l, i)) for l, i in updates.items() if l != "macOS"]
     everything = " ; ".join(c for _, _, c in sections if c)
+    n_review = sum(1 for _, i, _ in sections for x in i if x.get("review"))
     if everything:
-        action(f"Update everything ({n_updates - len(updates.get('macOS', []))})", everything,
+        action(f"Update everything ({n_updates - len(updates.get('macOS', [])) - n_review})", everything,
                " sfimage=bolt.circle.fill sfcolor=#30a46c",
-               steps=[(l, vetted(l, i, c)) for l, i, c in sections if c])
+               steps=[(l, vetted(safe_items(i), c)) for l, i, c in sections if c])
+    if n_review:
+        print(f"{n_review} updates need a look first, so they're left out (see Updates) | color=gray size=11")
     print("Hold ⌥ Option to copy commands instead of running them | color=gray size=11")
     print(f"Updates ({n_updates}) | sfimage=arrow.down.circle")
     for label, items in updates.items():
-        icon = {"macOS": "apple.logo", "Homebrew": "mug", "App Store": "bag", "npm (global)": "shippingbox",
-                "Python": "chevron.left.forwardslash.chevron.right"}.get(label, "app")
-        print(f"--{label} ({len(items)}) | sfimage={icon}")
+        eco = next((i.get("eco") for i in items if i.get("eco")), None)
+        icon = {"macOS": "apple.logo", "Homebrew": "mug", "App Store": "bag"}.get(label) or \
+            ("shippingbox" if eco == "npm" or label.startswith("Node") else
+             "chevron.left.forwardslash.chevron.right" if eco or label.startswith("Python") else "app")
+        print(f"--{esc(label)} ({len(items)}) | sfimage={icon}")
         if not items:
             if label in missing:
                 print(f"----Not set up: needs {missing[label]} | color=gray")
@@ -251,15 +268,61 @@ def main():
                 print("----Up to date | color=gray")
             continue
         cmd = section_cmd(label, items)
+        safe = items if label in ("Homebrew", "App Store") else safe_items(items)
+        review = [i for i in items if i.get("review")]
         if cmd:
-            action(f"----Update all {label}", cmd, " sfimage=bolt.fill", vetted(label, items, cmd))
+            short = label.split(" (")[0]
+            action(f"----Update all {esc(short)} ({len(safe)})", cmd, " sfimage=bolt.fill", vetted(safe, cmd))
             print("---------")
-        for i in items[:MAX_ROWS]:
+        for i in safe[:MAX_ROWS]:
             color = " color=#e5484d" if i["severity"] == "security" else ""
             action(f"----{esc(i['name'])}  {esc(i['current'])} → {esc(i['latest'])}", i["cmd"], color,
-                   vetted(label, [i], i["cmd"]))
-        if len(items) > MAX_ROWS:
-            print(f"----…and {len(items) - MAX_ROWS} more (Update all covers them) | color=gray")
+                   vetted([i], i["cmd"]))
+        if len(safe) > MAX_ROWS:
+            print(f"----…and {len(safe) - MAX_ROWS} more (Update all covers them) | color=gray")
+        if review:
+            print(f"----Review first ({len(review)}) | sfimage=exclamationmark.triangle sfcolor=#d4a72c")
+            print("------Left out of Update all: updating these alone can break other packages | color=gray size=12")
+            done_groups = set()
+            for i in review:
+                print(f"------{esc(i['name'])}  {esc(i['current'])} → {esc(i['latest'])}")
+                print(f"--------{esc(i['review'])} | color=gray size=12")
+                group = tuple(i.get("group") or ())
+                if group and group not in done_groups:
+                    # Installing the group in one pip call lets pip pick versions that match each other.
+                    done_groups.add(group)
+                    gcmd = pkg_cmd([i], list(group))
+                    action(f"--------Update {', '.join(group)} together", gcmd, " sfimage=link",
+                           vetted([x for x in review if x["name"] in group], gcmd))
+                elif not group:
+                    action("--------Update anyway", i["cmd"], " sfimage=bolt", vetted([i], i["cmd"]))
+
+    envs = st.get("envs") or []
+    if envs:
+        print("---")
+        tips = sum(1 for e in envs if e.get("suggest"))
+        print(f"Python & Node installs ({len(envs)})" + (f" · {tips} tips" if tips else "") + " | sfimage=square.stack.3d.up")
+        print("--Every copy Patchbar found. Several are normal (projects pin versions); nothing is removed for you | color=gray size=12")
+        for kind in ("python", "node"):
+            group = [e for e in envs if e["kind"] == kind]
+            if not group:
+                continue
+            print("-----")
+            for e in group:
+                mark = "star.fill" if e["default"] else "lock" if e["managed"] else "circle"
+                print(f"--{esc(e['label'])} | sfimage={mark}")
+                print(f"----{esc(e['path'].replace(str(HOME), '~'))} | color=gray size=12")
+                if e["default"]:
+                    print("----What a new Terminal window uses | color=gray size=12")
+                if e.get("checked"):
+                    print("----Packages checked; updates are listed under Updates | color=gray size=12")
+                for n in e.get("notes") or []:
+                    print(f"----{esc(n)} | color=gray size=12")
+                s = e.get("suggest")
+                if s:
+                    print(f"----Tip: {esc(s['text'])} | sfimage=lightbulb sfcolor=#d4a72c")
+                    print(f"------{esc(s['why'])} | color=gray size=12")
+                    print(f"------Copy: {esc(s['cmd'])} | {copy(s['cmd'])} sfimage=doc.on.clipboard")
 
     print("---")
     print(f"Vulnerable project deps · {len(crit_projects)} critical, {len(critical_projects) - len(crit_projects)} high-only | sfimage=ladybug")

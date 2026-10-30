@@ -5,8 +5,8 @@ Sources:
   - macOS system updates (softwareupdate)
   - Homebrew formulae + casks (brew outdated)
   - Mac App Store apps (mas outdated)
-  - Global npm packages (npm outdated -g)
-  - Python packages for the active python3 (pip list --outdated)
+  - Every Python and Node install (pyenv, Homebrew, Apple, uv, conda, nvm, fnm, Volta...) and the
+    outdated global packages of each one that pip/npm may safely update (see envs.py)
   - Project lockfile vulnerabilities (osv-scanner -> OSV.dev, includes GHSA/NVD data)
   - CISA Known Exploited Vulnerabilities, matched against installed apps/tools
 
@@ -22,6 +22,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import envs
 
 HOME = Path.home()
 CACHE = HOME / "Library/Caches/patchbar"
@@ -76,9 +78,13 @@ def scan_macos():
     items = []
     for label, title in re.findall(r"\* Label: (.+)\n\s+Title: ([^,]+)", out):
         security = bool(re.search(r"security|rapid", label, re.I))
-        items.append(item(title.strip(), "", label.strip(),
-                          "open x-apple.systempreferences:com.apple.Software-Update-Settings.extension",
-                          "security" if security else "update"))
+        i = item(title.strip(), "", label.strip(),
+                 "open x-apple.systempreferences:com.apple.Software-Update-Settings.extension",
+                 "security" if security else "update")
+        # Only macOS / Safari / security responses can fix an Apple KEV; Xcode or Command Line Tools can't.
+        i["os_patch"] = bool(re.search(r"macos|safari|security", label + title, re.I)) and \
+            not re.search(r"command line tools|xcode", label + title, re.I)
+        items.append(i)
     return items
 
 
@@ -105,44 +111,6 @@ def scan_mas():
         if m:
             items.append(item(m[2], m[3], m[4], f"open 'macappstore://apps.apple.com/app/id{m[1]}'"))
     return items
-
-
-def scan_npm():
-    out, _ = run(["npm", "outdated", "-g", "--json"])
-    try:
-        data = json.loads(out or "{}")
-    except json.JSONDecodeError:
-        return []
-    return [item(n, v.get("current"), v.get("latest"), f"npm install -g {n}@latest") for n, v in data.items()
-            if v.get("current") != v.get("latest")]
-
-
-def python_exe():
-    """The interpreter whose packages Patchbar checks and updates.
-
-    Prefer pyenv's (what an interactive shell uses) over Homebrew's, and skip "externally managed"
-    interpreters (Homebrew, macOS) since pip refuses to install into them; Homebrew updates those itself.
-    """
-    probe = "import sys, sysconfig, os; print(sys.executable); " \
-            "print(os.path.exists(os.path.join(sysconfig.get_path('stdlib'), 'EXTERNALLY-MANAGED')))"
-    for cand in (str(HOME / ".pyenv/shims/python3"), "python3"):
-        out, _ = run([cand, "-c", probe])
-        lines = out.split()
-        if len(lines) == 2 and lines[1] == "False" and not lines[0].startswith("/Library/Developer"):
-            return lines[0]
-    return None
-
-
-def scan_pip():
-    exe = python_exe()
-    if not exe:
-        return []
-    out, _ = run([exe, "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check"], timeout=180)
-    try:
-        data = json.loads(out or "[]")
-    except json.JSONDecodeError:
-        return []
-    return [item(p["name"], p["version"], p["latest_version"], f"{exe} -m pip install -U {p['name']}") for p in data]
 
 
 SEV_RANK = {"CRITICAL": 4, "HIGH": 3, "MODERATE": 2, "MEDIUM": 2, "LOW": 1}
@@ -235,12 +203,9 @@ def main():
     lock.touch()
     try:
         skip = set(cfg["skip"])
-        steps = {
-            "macOS": scan_macos, "Homebrew": scan_brew, "App Store": scan_mas,
-            "npm (global)": scan_npm, "Python": scan_pip,
-        }
+        steps = {"macOS": scan_macos, "Homebrew": scan_brew, "App Store": scan_mas}
         state = {"scanned_at": datetime.now().isoformat(timespec="seconds"), "updates": {}, "vulns": {}}
-        needs = {"Homebrew": "brew", "App Store": "mas", "npm (global)": "npm", "Python": "python3"}
+        needs = {"Homebrew": "brew", "App Store": "mas"}
         state["missing"] = {}
         for label, fn in steps.items():
             tool = needs.get(label)
@@ -252,7 +217,14 @@ def main():
                 state["updates"][label] = [i for i in fn() if i["name"] not in skip]
             except Exception as e:
                 state["updates"][label] = [{"name": f"scan failed: {e}", "current": "", "latest": "", "cmd": "", "severity": "error"}]
-        state["python"] = python_exe() or "python3"
+        try:
+            env_list, sections = envs.scan(skip)
+            state["updates"].update(sections)
+            keep = ("kind", "source", "version", "label", "path", "default", "managed", "checked", "notes", "suggest")
+            state["envs"] = [{k: e.get(k) for k in keep} for e in env_list]
+        except Exception as e:
+            state["updates"]["Python & Node"] = [{"name": f"scan failed: {e}", "current": "", "latest": "",
+                                                  "cmd": "", "severity": "error"}]
         state["vulns"]["Exploited in the wild (CISA KEV)"] = scan_kev(cfg["kev_days"])
         if shutil.which("osv-scanner"):
             state["vulns"]["Project dependencies (OSV)"] = scan_osv(cfg["project_roots"])

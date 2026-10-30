@@ -20,12 +20,25 @@ Use `install.sh --minimal` to skip the optional tools.
 
 - **Shield icon**: red `3·82` means 3 actively exploited bugs with a fix waiting, and 82 updates total.
 - **Update everything**: one click runs every update (except macOS) in Terminal, then re-scans.
-- **Per-section and per-app buttons**: covers macOS, Homebrew, App Store, global npm and Python.
+- **Per-section and per-app buttons**: covers macOS, Homebrew, App Store, and the global packages of every Python and Node on your Mac.
+- **Every Python and Node, each kept separately**: see below.
 - **Hold ⌥ Option** while the menu is open to copy a command instead of running it.
-- **Actively exploited**: [CISA's Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, matched to apps on your Mac. Each match is marked "update pending" or "you look patched".
+- **Actively exploited**: [CISA's Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, matched to apps on your Mac. Each match is marked "update pending" or "you look patched". Apple bugs only count as pending when a macOS, Safari or security update is waiting (not Xcode or Command Line Tools).
 - **Vulnerable project deps**: checks lockfiles in your code folders with [OSV.dev](https://osv.dev) (GitHub Advisories, NVD, npm, PyPI, Packagist). Shows critical and high issues only.
 
 Scans run in the background every 6 hours. The menu opens instantly.
+
+## Every Python and Node install
+
+Most Macs end up with several copies of Python and Node: Apple's, Homebrew's, plus pyenv, nvm, uv, conda, fnm, Volta or asdf versions. Patchbar finds them all and treats each one on its own:
+
+- **Its own section**, e.g. "Python · pyenv 3.12.3 (your default)". "Your default" is what a new Terminal window runs.
+- **Updates pinned to that install.** Each button calls that exact interpreter (or puts that node first on `PATH`), so an update never lands in a different Python than the one that was checked.
+- **Managed installs are left alone.** Homebrew's and Apple's Pythons, conda and Volta are updated by their own tools, so Patchbar never runs pip or npm on them. (Homebrew node's own npm is left to Homebrew too.)
+- **Review first.** Updates that can break other packages stay out of "Update everything": packages that must move together (torch/torchvision/torchaudio, tensorflow, jax…), an update another installed package doesn't allow (e.g. `torch` needs `setuptools<82`), and anything `pip check` already flags. Each gets its own button with the reason.
+- **Python & Node installs** menu lists every copy, where it lives, whether it's past end of support, and a safe tip when there is one (a newer patch release for your pyenv/nvm version, or a Homebrew Python nothing depends on). Tips are copy-only. Patchbar never uninstalls anything.
+
+Several versions side by side is normal (projects pin versions), so nothing is flagged as a problem just for existing.
 
 ## Suspicious-update check
 
