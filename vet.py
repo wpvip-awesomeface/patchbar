@@ -310,9 +310,17 @@ def parse(argv):
 def install(eco, specs):
     if not specs:
         return 0
-    cmd = ["npm", "install", "-g", *specs] if eco == "npm" else [os.environ.get("PATCHBAR_PYTHON", "python3"), "-m", "pip", "install", "-U", *specs]
+    # Patchbar pins each update to one install: PATCHBAR_PYTHON is the interpreter, PATCHBAR_NPM_PATH puts
+    # that node's bin dir (behind any npm safety shim) first on PATH.
+    env = dict(os.environ)
+    if eco == "npm":
+        cmd = ["npm", "install", "-g", *specs]
+        if os.environ.get("PATCHBAR_NPM_PATH"):
+            env["PATH"] = os.environ["PATCHBAR_NPM_PATH"] + ":" + env.get("PATH", "")
+    else:
+        cmd = [os.environ.get("PATCHBAR_PYTHON", "python3"), "-m", "pip", "install", "-U", *specs]
     print(f"\n{C['b']}Installing:{C['0']} {' '.join(cmd)}\n", flush=True)
-    return subprocess.call(cmd)
+    return subprocess.call(cmd, env=env)
 
 
 def main():
