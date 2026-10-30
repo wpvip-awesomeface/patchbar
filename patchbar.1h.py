@@ -208,7 +208,13 @@ def main():
     if LAST_RUN.exists():
         try:
             lr = json.loads(LAST_RUN.read_text())
-            if lr["failed"]:
+            # A scan after the run already shows what's still pending, so an old failure goes grey.
+            stale = LAST_RUN.stat().st_mtime < STATE.stat().st_mtime
+            if lr["failed"] and stale:
+                day = datetime.fromtimestamp(LAST_RUN.stat().st_mtime).strftime("%b %-d")
+                print(f"Last update ({day} {lr['at']}): {esc(lr['failed'])} didn't finish, re-scanned since | "
+                      f"bash=/usr/bin/open param1=-t param2={LOG} terminal=false color=gray size=12")
+            elif lr["failed"]:
                 print(f"Last update ({lr['at']}): didn't finish: {esc(lr['failed'])} | bash=/usr/bin/open param1=-t "
                       f"param2={LOG} terminal=false color=#e5484d sfimage=exclamationmark.triangle")
             else:
