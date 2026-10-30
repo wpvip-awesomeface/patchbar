@@ -19,6 +19,7 @@ Package files are read in memory only; nothing from them is written to disk or r
 """
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -309,7 +310,7 @@ def parse(argv):
 def install(eco, specs):
     if not specs:
         return 0
-    cmd = ["npm", "install", "-g", *specs] if eco == "npm" else ["python3", "-m", "pip", "install", "-U", *specs]
+    cmd = ["npm", "install", "-g", *specs] if eco == "npm" else [os.environ.get("PATCHBAR_PYTHON", "python3"), "-m", "pip", "install", "-U", *specs]
     print(f"\n{C['b']}Installing:{C['0']} {' '.join(cmd)}\n", flush=True)
     return subprocess.call(cmd)
 
