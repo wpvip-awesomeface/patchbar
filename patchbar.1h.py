@@ -24,6 +24,9 @@ COPY = SCAN.parent / "copy.sh"
 VET = SCAN.parent / "vet.py"
 REPO = SCAN.parent
 BREW_PATH = "/opt/homebrew/bin:/usr/local/bin"
+# Lockfile-only: no node_modules churn, no install scripts, no breaking (--force) upgrades.
+# --audit-level=none keeps the exit code for real errors, not for issues that need a manual major bump.
+AUDIT_FIX = "npm audit fix --package-lock-only --audit-level=none"
 STALE_SECONDS = 6 * 3600
 MAX_ROWS = 25
 
@@ -331,12 +334,23 @@ def main():
         action("--Set it up", "brew install osv-scanner", " sfimage=plus.circle")
     elif not critical_projects:
         print("--No critical/high issues in lockfiles | color=gray")
+    npm_dirs = [d for d, _ in critical_projects if (Path(d) / "package-lock.json").exists()]
+    if npm_dirs:
+        fix_all = " ; ".join(f"(cd {shlex.quote(d)} && {AUDIT_FIX})" for d in npm_dirs)
+        action(f"--Fix all npm projects ({len(npm_dirs)})", fix_all, " sfimage=bolt.circle.fill sfcolor=#30a46c",
+               steps=[(Path(d).name, f"cd {shlex.quote(d)} && {AUDIT_FIX}") for d in npm_dirs])
+        print("--Safe fixes only (no major-version jumps); updates lockfiles, review with git diff | color=gray size=11")
+        others = len(critical_projects) - len(npm_dirs)
+        if others:
+            print(f"--{others} other projects (PHP/Python) need fixing by hand | color=gray size=11")
+        print("-----")
     for d, c in critical_projects[:MAX_ROWS]:
         rel = d.replace(str(HOME) + "/", "~/")
         print(f"--{esc(Path(d).name)}  {c['CRITICAL']} critical · {c['HIGH']} high | {term('cd ' + repr(d) + ' && osv-scanner scan source .')}")
         print(f"----{esc(rel)} | color=gray size=12")
         print(f"----Open folder | bash=/usr/bin/open param1={d} terminal=false")
-        print(f"----Fix with npm audit | {term('cd ' + repr(d) + ' && npm audit fix')}")
+        if (Path(d) / "package-lock.json").exists():
+            print(f"----Fix with npm audit | {term('cd ' + shlex.quote(d) + ' && ' + AUDIT_FIX)}")
     print("--Severity data: OSV.dev (GitHub Advisories, NVD, PyPI, npm) | color=gray size=12")
 
     print("---")
