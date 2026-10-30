@@ -89,6 +89,7 @@ def action(text, cmd, extra="", run=None, steps=None):
     print(f"{depth}Copy: {esc(label)} | {copy(cmd)} alternate=true sfimage=doc.on.clipboard")
 
 
+PYTHON = "python3"  # set from the scan: the interpreter whose packages were checked
 VET_ECO = {"npm (global)": "npm", "Python": "pypi"}
 
 
@@ -98,7 +99,8 @@ def vetted(label, items, cmd):
     pkgs = [f"{i['name']}@{i['current']}" for i in items if i.get("cmd")]
     if not eco or not cmd or not pkgs:
         return cmd
-    return " ".join(["/usr/bin/python3", shlex.quote(str(VET)), eco, *map(shlex.quote, pkgs)])
+    env = [f"PATCHBAR_PYTHON={shlex.quote(PYTHON)}"] if eco == "pypi" else []
+    return " ".join([*env, "/usr/bin/python3", shlex.quote(str(VET)), eco, *map(shlex.quote, pkgs)])
 
 
 def section_cmd(label, items):
@@ -115,11 +117,19 @@ def section_cmd(label, items):
     if label == "npm (global)":
         return "npm install -g " + " ".join(f"{n}@latest" for n in names)
     if label == "Python":
-        return "python3 -m pip install -U " + " ".join(names)
+        return f"{shlex.quote(PYTHON)} -m pip install -U " + " ".join(names)
     return " ; ".join(i["cmd"] for i in items if i.get("cmd"))
 
 
 def main():
+    # SwiftBar 2.1 patches the open menu in place when titles change, and parents whose counts changed
+    # come back greyed out. Printing nothing once makes it drop the menu, so the next run rebuilds it.
+    rebuild = STATE.parent / "rebuild"
+    if rebuild.exists():
+        rebuild.unlink(missing_ok=True)
+        subprocess.Popen(["/bin/sh", "-c", "sleep 1; /usr/bin/open -g 'swiftbar://refreshplugin?name=patchbar'"],
+                         start_new_session=True)
+        return
     for old in RUN_DIR.glob("*.command"):  # prune; never delete a script that may be running right now
         if time.time() - old.stat().st_mtime > 86400:
             old.unlink(missing_ok=True)
@@ -136,6 +146,8 @@ def main():
     if age > STALE_SECONDS:
         start_scan()
 
+    global PYTHON
+    PYTHON = st.get("python", "python3")
     updates = st["updates"]
     missing = st.get("missing", {})
     kev = st["vulns"].get("Exploited in the wild (CISA KEV)", [])

@@ -117,13 +117,32 @@ def scan_npm():
             if v.get("current") != v.get("latest")]
 
 
+def python_exe():
+    """The interpreter whose packages Patchbar checks and updates.
+
+    Prefer pyenv's (what an interactive shell uses) over Homebrew's, and skip "externally managed"
+    interpreters (Homebrew, macOS) since pip refuses to install into them; Homebrew updates those itself.
+    """
+    probe = "import sys, sysconfig, os; print(sys.executable); " \
+            "print(os.path.exists(os.path.join(sysconfig.get_path('stdlib'), 'EXTERNALLY-MANAGED')))"
+    for cand in (str(HOME / ".pyenv/shims/python3"), "python3"):
+        out, _ = run([cand, "-c", probe])
+        lines = out.split()
+        if len(lines) == 2 and lines[1] == "False" and not lines[0].startswith("/Library/Developer"):
+            return lines[0]
+    return None
+
+
 def scan_pip():
-    out, _ = run(["python3", "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check"], timeout=180)
+    exe = python_exe()
+    if not exe:
+        return []
+    out, _ = run([exe, "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check"], timeout=180)
     try:
         data = json.loads(out or "[]")
     except json.JSONDecodeError:
         return []
-    return [item(p["name"], p["version"], p["latest_version"], f"python3 -m pip install -U {p['name']}") for p in data]
+    return [item(p["name"], p["version"], p["latest_version"], f"{exe} -m pip install -U {p['name']}") for p in data]
 
 
 SEV_RANK = {"CRITICAL": 4, "HIGH": 3, "MODERATE": 2, "MEDIUM": 2, "LOW": 1}
@@ -233,6 +252,7 @@ def main():
                 state["updates"][label] = [i for i in fn() if i["name"] not in skip]
             except Exception as e:
                 state["updates"][label] = [{"name": f"scan failed: {e}", "current": "", "latest": "", "cmd": "", "severity": "error"}]
+        state["python"] = python_exe() or "python3"
         state["vulns"]["Exploited in the wild (CISA KEV)"] = scan_kev(cfg["kev_days"])
         if shutil.which("osv-scanner"):
             state["vulns"]["Project dependencies (OSV)"] = scan_osv(cfg["project_roots"])
@@ -242,7 +262,8 @@ def main():
         tmp.write_text(json.dumps(state, indent=2))
         tmp.replace(STATE)
         print(f"wrote {STATE}")
-        # Ask SwiftBar to redraw now instead of waiting for the hourly refresh.
+        # Ask SwiftBar to redraw now. The flag makes the plugin do a full rebuild (see patchbar.1h.py).
+        (CACHE / "rebuild").touch()
         run(["/usr/bin/open", "-g", "swiftbar://refreshplugin?name=patchbar"], timeout=10)
     finally:
         lock.unlink(missing_ok=True)
