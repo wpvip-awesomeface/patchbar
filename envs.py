@@ -323,6 +323,56 @@ def npm_path(node_bin):
     return ":".join([*shims, node_bin])
 
 
+def node_satisfies(version, rng):
+    """Does node `version` meet an engines range like "^22.22.2 || >=26.0.0"? Syntax we don't parse counts as yes."""
+    v = vtuple(version)
+    for alt in rng.split("||"):
+        ok = True
+        for part in alt.split():
+            m = re.fullmatch(r"(\^|~|>=|<=|>|<|=)?v?(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?", part)
+            if not m:
+                if part in ("*", "x"):
+                    continue
+                return True
+            op = m[1] or "="
+            nums = [int(n) if n and n.isdigit() else None for n in m.groups()[1:]]
+            lo = tuple(n or 0 for n in nums)
+            if op == "^" or (op == "=" and nums[1] is None):
+                ok = ok and lo <= v < (lo[0] + 1, 0, 0)
+            elif op == "~" or (op == "=" and nums[2] is None):
+                ok = ok and lo <= v < (lo[0], lo[1] + 1, 0)
+            else:
+                ok = ok and {">=": v >= lo, ">": v > lo, "<=": v <= lo, "<": v < lo, "=": v == lo}[op]
+        if ok:
+            return True
+    return False
+
+
+_PACKUMENTS = {}
+
+
+def newest_for_node(name, node_version):
+    """Newest stable release of an npm package whose engines.node accepts this node, or None if unknown."""
+    if name not in _PACKUMENTS:
+        try:
+            req = urllib.request.Request("https://registry.npmjs.org/" + name.replace("/", "%2F"),
+                                         headers={"User-Agent": "patchbar", "Accept": "application/vnd.npm.install-v1+json"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                _PACKUMENTS[name] = json.load(r).get("versions", {})
+        except Exception:
+            _PACKUMENTS[name] = None
+    versions = _PACKUMENTS[name]
+    if not versions:
+        return None
+    fits = []
+    for v, meta in versions.items():
+        engines = meta.get("engines")
+        rng = engines.get("node") if isinstance(engines, dict) else None
+        if "-" not in v and node_satisfies(node_version, rng or "*"):
+            fits.append(v)
+    return max(fits, key=vtuple, default=None)
+
+
 def npm_outdated(env):
     path = npm_path(env["bin"])
     out, _ = run(["npm", "outdated", "-g", "--json"], timeout=180,
@@ -338,9 +388,16 @@ def npm_outdated(env):
             continue
         if env["source"] == "Homebrew" and n in BREW_NODE_BUNDLED:
             continue
-        items.append({"name": n, "current": v["current"], "latest": v.get("latest"),
-                      "cmd": f"{prefix}npm install -g {n}@latest", "severity": "update",
-                      "eco": "npm", "npm_path": path})
+        # The latest release may need a newer node than this one (npm 12 won't install on node 18), so aim
+        # for the newest release this node can run; skip the package if that's what's already installed.
+        # Pin whenever we know the fit: vet.py looks up the registry's "latest" on its own otherwise.
+        fit = newest_for_node(n, env["version"])
+        if fit and vtuple(fit) <= vtuple(v["current"]):
+            continue
+        latest, pin = fit or v.get("latest"), bool(fit)
+        items.append({"name": n, "current": v["current"], "latest": latest,
+                      "cmd": f"{prefix}npm install -g {n}@{latest if pin else 'latest'}", "severity": "update",
+                      "eco": "npm", "npm_path": path, "pin": pin})
     return items
 
 
