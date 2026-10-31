@@ -101,7 +101,8 @@ def vetted(items, cmd):
     eco, first = items[0]["eco"], items[0]
     env = ([f"PATCHBAR_PYTHON={shlex.quote(first['python'])}"] if eco == "pypi" and first.get("python") else
            [f"PATCHBAR_NPM_PATH={shlex.quote(first['npm_path'])}"] if eco == "npm" and first.get("npm_path") else [])
-    pkgs = [f"{i['name']}@{i['current']}" for i in items]
+    # A pinned item targets the newest version its node can run, not npm's "latest".
+    pkgs = [f"{i['name']}@{i['current']}" + (f"..{i['latest']}" if i.get("pin") else "") for i in items]
     return " ".join([*env, "/usr/bin/python3", shlex.quote(str(VET)), eco, *map(shlex.quote, pkgs)])
 
 
@@ -117,7 +118,8 @@ def pkg_cmd(items, names):
         return f"{shlex.quote(first['python'])} -m pip install -U " + " ".join(names)
     if first.get("eco") == "npm":
         prefix = first["cmd"].split("npm install", 1)[0]
-        return f"{prefix}npm install -g " + " ".join(f"{n}@latest" for n in names)
+        pinned = {i["name"]: i["latest"] for i in items if i.get("pin")}
+        return f"{prefix}npm install -g " + " ".join(f"{n}@{pinned.get(n, 'latest')}" for n in names)
     return ""
 
 
@@ -236,7 +238,7 @@ def main():
         print(f"--{esc(k['name'])} · {k['id']} · {status} | href={k['url']} color={'#e5484d' if fix else 'gray'}")
         if fix:
             action(f"----Patch now: {esc(fix['name'])} → {esc(fix['latest'])}", fix["cmd"], " sfimage=bolt.fill",
-                   vetted(label_of.get(id(fix)), [fix], fix["cmd"]))
+                   vetted([fix], fix["cmd"]))
         if k.get("title"):
             print(f"----{esc(k['title'])} | color=gray size=12")
             print(f"----Added {k['added']} · CISA patch-by {k.get('due')} | color=gray size=12")

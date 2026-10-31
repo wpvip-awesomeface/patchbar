@@ -38,7 +38,7 @@ fi
 say "Linking the Patchbar plugin"
 mkdir -p "$PLUGINS"
 chmod +x "$DIR"/*.sh "$DIR"/*.py
-rm -f "$PLUGINS"/patchbar.*.py
+rm -f "$PLUGINS"/patchbar.*.py(N)  # (N): no match on a first install is fine, not a zsh error
 ln -sf "$DIR/patchbar.1h.py" "$PLUGINS/patchbar.1h.py"
 defaults write com.ameba.SwiftBar PluginDirectory -string "$PLUGINS"
 
