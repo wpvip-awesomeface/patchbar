@@ -236,7 +236,7 @@ def main():
         print(f"--{esc(k['name'])} · {k['id']} · {status} | href={k['url']} color={'#e5484d' if fix else 'gray'}")
         if fix:
             action(f"----Patch now: {esc(fix['name'])} → {esc(fix['latest'])}", fix["cmd"], " sfimage=bolt.fill",
-                   vetted(label_of.get(id(fix)), [fix], fix["cmd"]))
+                   vetted([fix], fix["cmd"]))
         if k.get("title"):
             print(f"----{esc(k['title'])} | color=gray size=12")
             print(f"----Added {k['added']} · CISA patch-by {k.get('due')} | color=gray size=12")
