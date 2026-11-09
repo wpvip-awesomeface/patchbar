@@ -167,7 +167,6 @@ def main():
     kev = st["vulns"].get("Exploited in the wild (CISA KEV)", [])
     # A KEV hit only counts as "act now" if a matching update is actually pending on this Mac.
     pending = {i["name"].lower(): i for items in updates.values() for i in items}
-    label_of = {id(i): label for label, items in updates.items() for i in items}
     for k in kev:
         words = [w for w in k["name"].lower().replace("group", "").split() if len(w) > 2]
         if k["name"].startswith("Apple"):
@@ -236,7 +235,7 @@ def main():
         print(f"--{esc(k['name'])} · {k['id']} · {status} | href={k['url']} color={'#e5484d' if fix else 'gray'}")
         if fix:
             action(f"----Patch now: {esc(fix['name'])} → {esc(fix['latest'])}", fix["cmd"], " sfimage=bolt.fill",
-                   vetted(label_of.get(id(fix)), [fix], fix["cmd"]))
+                   vetted([fix], fix["cmd"]))
         if k.get("title"):
             print(f"----{esc(k['title'])} | color=gray size=12")
             print(f"----Added {k['added']} · CISA patch-by {k.get('due')} | color=gray size=12")
