@@ -143,7 +143,7 @@ def main():
     rebuild = STATE.parent / "rebuild"
     if rebuild.exists():
         rebuild.unlink(missing_ok=True)
-        subprocess.Popen(["/bin/sh", "-c", "sleep 1; /usr/bin/open -g 'swiftbar://refreshplugin?name=patchbar'"],
+        subprocess.Popen(["/bin/sh", "-c", "sleep 1; /usr/bin/pgrep -xq SwiftBar && /usr/bin/open -g 'swiftbar://refreshplugin?name=patchbar'"],
                          start_new_session=True)
         return
     for old in RUN_DIR.glob("*.command"):  # prune; never delete a script that may be running right now
