@@ -48,4 +48,6 @@ say "Starting the first scan in the background (takes a few minutes)"
 pkill -x SwiftBar 2>/dev/null || true
 sleep 1
 open -a SwiftBar
+# Start SwiftBar at login, or the shield is gone after every restart.
+osascript -e 'tell application "System Events" to if not (exists login item "SwiftBar") then make login item at end with properties {path:"/Applications/SwiftBar.app", hidden:false}' >/dev/null 2>&1 || true
 say "Done. Look for the shield in your menu bar."

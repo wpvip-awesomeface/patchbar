@@ -235,8 +235,11 @@ def main():
         tmp.replace(STATE)
         print(f"wrote {STATE}")
         # Ask SwiftBar to redraw now. The flag makes the plugin do a full rebuild (see patchbar.1h.py).
-        (CACHE / "rebuild").touch()
-        run(["/usr/bin/open", "-g", "swiftbar://refreshplugin?name=patchbar"], timeout=10)
+        # Only when SwiftBar is running: a swiftbar:// link that cold-launches it crashes SwiftBar 2.1.
+        _, rc = run(["/usr/bin/pgrep", "-xq", "SwiftBar"], timeout=10)
+        if rc == 0:
+            (CACHE / "rebuild").touch()
+            run(["/usr/bin/open", "-g", "swiftbar://refreshplugin?name=patchbar"], timeout=10)
     finally:
         lock.unlink(missing_ok=True)
 
